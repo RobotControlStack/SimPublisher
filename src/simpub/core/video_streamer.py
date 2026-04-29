@@ -59,10 +59,44 @@ class VideoStreamer:
 class VideoStreamerManager(ServerBase):
     def __init__(self, ip_addr: str = "127.0.0.1"):
         self.streamers: Dict[str, VideoStreamer] = {}
+        self._announced_streams_by_device: Dict[str, set[str]] = {}
         super().__init__("VideoStreamerManager", ip_addr)
 
     def initialize(self) -> None:
         pass
+
+    def _device_key(self, xr_info: XRNodeInfo) -> str:
+        return xr_info.get("nodeID", xr_info.get("name", "unknown"))
+
+    def _mark_announced(self, xr_info: XRNodeInfo, video_source_topic: str) -> None:
+        device_key = self._device_key(xr_info)
+        if device_key not in self._announced_streams_by_device:
+            self._announced_streams_by_device[device_key] = set()
+        self._announced_streams_by_device[device_key].add(video_source_topic)
+
+    def _already_announced(self, xr_info: XRNodeInfo, video_source_topic: str) -> bool:
+        device_key = self._device_key(xr_info)
+        return video_source_topic in self._announced_streams_by_device.get(device_key, set())
+
+    def _notify_device_about_stream(self, xr_info: XRNodeInfo, streamer: VideoStreamer) -> None:
+        if self._already_announced(xr_info, streamer.video_source_topic):
+            return
+        pyzlc.call(
+            f"{xr_info['name']}/SpawnVideoReceiver",
+            streamer.config,
+            group_name=ZLC_GROUP_NAME,
+        )
+        self._mark_announced(xr_info, streamer.video_source_topic)
+
+    async def _notify_device_about_stream_async(self, xr_info: XRNodeInfo, streamer: VideoStreamer) -> None:
+        if self._already_announced(xr_info, streamer.video_source_topic):
+            return
+        await pyzlc.async_call(
+            f"{xr_info['name']}/SpawnVideoReceiver",
+            streamer.config,
+            group_name=ZLC_GROUP_NAME,
+        )
+        self._mark_announced(xr_info, streamer.video_source_topic)
 
     def create_streamer(self, video_source_topic: str, width: int, height: int) -> VideoStreamer:
         if video_source_topic in self.streamers:
@@ -78,11 +112,7 @@ class VideoStreamerManager(ServerBase):
                 if not xr_info["name"].startswith("IRIS/Device/"):
                     continue
                 try:
-                    pyzlc.call(
-                        f"{xr_info['name']}/SpawnVideoReceiver",
-                        streamer.config,
-                        group_name=ZLC_GROUP_NAME,
-                    )
+                    self._notify_device_about_stream(xr_info, streamer)
                 except Exception as e:
                     print(f"Failed to notify {xr_info['name']} about video stream '{video_source_topic}': {e}")
             return streamer
@@ -101,11 +131,7 @@ class VideoStreamerManager(ServerBase):
         for topic, streamer in self.streamers.items():
             print(f"Current video stream topic: '{topic}'")
             try:                
-                await pyzlc.async_call(
-                    f"{xr_info['name']}/SpawnVideoReceiver",
-                    streamer.config,
-                    group_name=ZLC_GROUP_NAME,
-                )
+                await self._notify_device_about_stream_async(xr_info, streamer)
             except Exception as e:
                 print(f"Error notifying XR device '{xr_info.get('name', 'Unknown')}' about video streamer topic '{topic}': {e}")
                 pyzlc.error(f"Error notifying XR device '{xr_info.get('name', 'Unknown')}' about video streamer topic '{topic}': {e}")
