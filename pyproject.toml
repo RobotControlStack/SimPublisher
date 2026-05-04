@@ -14,7 +14,7 @@ dependencies = [
     "flask",
     "pyyaml",
     "zmq",
-    "pyzlc",
+    "pyzlc==2.2.0",
 ]
 maintainers = [
   { name = "Xinkai Jiang" },
